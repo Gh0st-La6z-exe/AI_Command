@@ -1,6 +1,6 @@
 from command_center.core import CommandCenter
 
-
+#### Against all Evil, The Only Thing They FEAR is YOU. ####
 # CommandCenter owns the system components, so the entry point only needs
 # to create the top-level application object instead of constructing Agents,
 # Executors, EventBuses, and tools independently.
@@ -41,3 +41,5 @@ task = center.run(
 )
 
 print(task.status)
+if task.message:
+    print(task.message)

@@ -7,6 +7,7 @@ class TaskStatus(Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
+    UNSUPPORTED = "unsupported"
     FAILED = "failed"
 
 
@@ -29,3 +30,7 @@ class Task:
     # its execution. default_factory gives each Task its own list instead of
     # accidentally sharing one list between Task instances.
     results: list[object] = field(default_factory=list)
+
+    # A concise explanation is returned when the planner cannot produce
+    # supported work for the request.
+    message: str | None = None

@@ -9,8 +9,9 @@ from command_center.events.bus import EventBus
 from command_center.execution.executor import Executor
 from command_center.planner.planner import Plan, Planner, PlanStep
 from command_center.task import Task, TaskStatus
-from command_center.tools.registry import get_tool
+from command_center.tools.registry import get_capability, get_tool, list_capabilities
 from command_center.tools.repository import RepositoryResult
+from command_center.tools.repository import inspect_repository
 
 
 # --------------------------------------------------
@@ -34,7 +35,7 @@ assert context.goal == goal
 
 # Verify that the Planner converts the request into the expected
 # executable structure without actually executing the plan itself.
-planner = Planner()
+planner = Planner(get_capability)
 
 repository_result = get_tool("inspect_repository")(context.repository_path)
 plan = planner.plan(context, repository_result)
@@ -103,6 +104,17 @@ try:
 except ValueError as error:
     assert str(error) == "Unknown action: Does not exist."
 
+invalid_input_step = PlanStep(
+    action="read_file",
+    input="   ",
+)
+
+try:
+    executor.execute_step(invalid_input_step, context)
+    raise AssertionError("Executor accepted an input with the wrong type.")
+except ValueError as error:
+    assert str(error) == "Path input must not be empty."
+
 
 # --------------------------------------------------
 # RESULT TEST
@@ -170,6 +182,48 @@ assert len(filesystem_plan.steps) == 1
 assert isinstance(filesystem_plan.steps[0], PlanStep)
 assert filesystem_plan.steps[0].action == "read_file"
 assert Path(filesystem_plan.steps[0].input).name == "filesystem.py"
+
+capabilities = {capability.name: capability for capability in list_capabilities()}
+assert capabilities["inspect_repository"].result_type is RepositoryResult
+assert capabilities["read_file"].risk_level == "read_only"
+assert capabilities["read_file"].input_description == "a non-empty filesystem path"
+
+
+# A planner cannot propose an action that is absent from the capability registry.
+def unavailable_capability(action):
+    raise KeyError(action)
+
+
+unsupported_plan = Planner(unavailable_capability).plan(context, repository_result)
+assert unsupported_plan.supported is False
+assert unsupported_plan.steps == []
+assert "unavailable 'read_file'" in unsupported_plan.message
+
+missing_target_repository = RepositoryResult(
+    path=r"C:\Dev\AI_Command",
+    entries=[],
+    count=0,
+)
+missing_target_plan = planner.plan(context, missing_target_repository)
+assert missing_target_plan.supported is False
+assert "core.py" in missing_target_plan.message
+
+
+# Repository inspection prunes Git metadata and Python bytecode caches.
+with TemporaryDirectory() as temporary_repository:
+    repository_root = Path(temporary_repository)
+    (repository_root / ".git").mkdir()
+    (repository_root / ".git" / "config").write_text("git metadata", encoding="utf-8")
+    cache_path = repository_root / "package" / "__pycache__"
+    cache_path.mkdir(parents=True)
+    (cache_path / "module.pyc").write_bytes(b"bytecode")
+    source_path = repository_root / "package" / "module.py"
+    source_path.write_text("source", encoding="utf-8")
+
+    snapshot = inspect_repository(temporary_repository)
+
+    assert snapshot.entries == [source_path]
+    assert snapshot.count == 1
 
 
 # --------------------------------------------------
@@ -268,7 +322,7 @@ with TemporaryDirectory() as temporary_repository:
 assert failed_read_task.status == TaskStatus.FAILED
 
 
-# A request with no recognized target still completes after one inspection.
+# A request with no recognized target is explicitly reported as unsupported.
 with TemporaryDirectory() as temporary_repository:
     center = CommandCenter()
     tool_calls = []
@@ -289,9 +343,10 @@ with TemporaryDirectory() as temporary_repository:
         temporary_repository,
     )
 
-    assert inspection_only_task.status == TaskStatus.COMPLETED
+    assert inspection_only_task.status == TaskStatus.UNSUPPORTED
     assert tool_calls == ["inspect_repository"]
     assert len(inspection_only_task.results) == 1
+    assert "No supported source-file target" in inspection_only_task.message
 
 
 print("TEST PASSED")

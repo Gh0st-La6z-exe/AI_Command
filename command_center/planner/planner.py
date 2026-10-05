@@ -26,6 +26,8 @@ class Plan:
     # The Executor consumes this structure without needing to know how it
     # was constructed.
     steps: list[PlanStep]
+    supported: bool = True
+    message: str | None = None
 
     def add_step(self, step):
         # Keep plan construction inside Plan rather than exposing the list
@@ -34,6 +36,9 @@ class Plan:
 
 
 class Planner:
+    def __init__(self, capability_registry):
+        self.capability_registry = capability_registry
+
     def plan(self, context, repository_result):
         # Planning consumes observed repository state; it never invokes tools.
         prompt = context.task.prompt
@@ -49,22 +54,73 @@ class Planner:
             "agent": "agent.py",
         }
 
-        # Construct the Plan separately from execution. Planner decides WHAT
-        # work should happen; Executor is responsible for actually performing it.
-        plan = Plan(steps=[])
+        matched_targets = [
+            (keyword, filename)
+            for keyword, filename in targets.items()
+            if keyword in prompt.lower()
+        ]
+
+        if not matched_targets:
+            return Plan(
+                steps=[],
+                supported=False,
+                message="No supported source-file target was identified in the request.",
+            )
+
+        try:
+            capability = self.capability_registry("read_file")
+        except KeyError:
+            return Plan(
+                steps=[],
+                supported=False,
+                message="This request needs the unavailable 'read_file' capability.",
+            )
+
+        if capability.risk_level != "read_only":
+            return Plan(
+                steps=[],
+                supported=False,
+                message="The requested capability is outside the planner's read-only policy.",
+            )
+
+        steps = []
+        unavailable_targets = []
 
         # Match request keywords against known targets and create read_file
         # steps only when the corresponding file exists in the repository.
-        for keyword, filename in targets.items():
-            if keyword in prompt.lower():
-                entry = repository_result.find_file(filename)
+        for keyword, filename in matched_targets:
+            entry = repository_result.find_file(filename)
 
-                if entry is not None:
-                    plan.add_step(
-                        PlanStep(
-                            action="read_file",
-                            input=str(entry),
-                        )
-                    )
+            if entry is None:
+                unavailable_targets.append(filename)
+                continue
 
-        return plan
+            file_path = str(entry)
+            try:
+                capability.validate_input(file_path)
+            except (TypeError, ValueError):
+                unavailable_targets.append(filename)
+                continue
+
+            steps.append(
+                PlanStep(
+                    action=capability.name,
+                    input=file_path,
+                )
+            )
+
+        if not steps:
+            missing_files = ", ".join(unavailable_targets)
+            return Plan(
+                steps=[],
+                supported=False,
+                message=f"No readable requested target was found: {missing_files}.",
+            )
+
+        message = None
+        if unavailable_targets:
+            message = "Some requested targets were unavailable: " + ", ".join(
+                unavailable_targets
+            ) + "."
+
+        return Plan(steps=steps, message=message)

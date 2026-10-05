@@ -1,10 +1,12 @@
 from command_center.tools.result import ToolResult
+from command_center.tools.registry import get_capability
 
 
 class Executor:
-    def __init__(self, agent, tool_registry):
+    def __init__(self, agent, tool_registry, capability_registry=get_capability):
         self.agent = agent
         self.tool_registry = tool_registry
+        self.capability_registry = capability_registry
 
     def execute_step(self, step, context):
         # Executor is the deterministic gate for every plan step.
@@ -16,6 +18,13 @@ class Executor:
 
         if not step.input:
             raise ValueError("Plan step is missing input.")
+
+        try:
+            capability = self.capability_registry(step.action)
+        except KeyError:
+            raise ValueError(f"Unknown action: {step.action}")
+
+        capability.validate_input(step.input)
 
         # The Planner decides WHAT action should happen.
         # Executor decides WHICH registered tool is actually allowed to
@@ -30,10 +39,12 @@ class Executor:
 
         result = self.agent.run(step, context, tool)
 
-        # Agent performed the operation; Executor verifies what came back.
-        # This keeps deterministic result validation out of the Agent and
-        # gives the execution layer ownership of the tool/result contract.
-        assert isinstance(result, ToolResult)
+        if not isinstance(result, ToolResult) or not isinstance(
+            result, capability.result_type
+        ):
+            raise TypeError(
+                f"Action '{step.action}' returned an invalid result type."
+            )
 
         return result
 

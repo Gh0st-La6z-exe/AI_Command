@@ -4,7 +4,7 @@ from command_center.events.bus import EventBus
 from command_center.execution.executor import Executor
 from command_center.planner.planner import PlanStep, Planner
 from command_center.task import Task, TaskStatus
-from command_center.tools.registry import get_tool
+from command_center.tools.registry import get_capability, get_tool
 
 
 class CommandCenter:
@@ -14,7 +14,7 @@ class CommandCenter:
         # together. The individual components stay focused on their own
         # responsibilities instead of constructing each other internally.
         self.bus = EventBus()
-        self.planner = Planner()
+        self.planner = Planner(get_capability)
 
         self.agent = Agent(
             "Command Center",
@@ -24,6 +24,7 @@ class CommandCenter:
         self.executor = Executor(
             self.agent,
             get_tool,
+            get_capability,
         )
 
     def run(self, prompt, goal, repository_path):
@@ -48,6 +49,12 @@ class CommandCenter:
                 context,
             )
             plan = self.planner.plan(context, repository_result)
+            if not plan.supported:
+                task.message = plan.message
+                task.status = TaskStatus.UNSUPPORTED
+                return task
+
+            task.message = plan.message
             self.executor.execute_plan(plan, context)
             task.status = TaskStatus.COMPLETED
         except Exception:

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 from command_center.tools.result import ToolResult
@@ -34,15 +35,21 @@ class RepositoryResult(ToolResult):
 def inspect_repository(path):
     repository = Path(path)
 
-    # Recursively discover the repository contents so callers can reason
-    # about files regardless of which package or subdirectory contains them.
-    # Generated Python cache directories are excluded because they are not
-    # meaningful source artifacts for repository analysis.
-    entries = [
-        entry
-        for entry in repository.rglob("*")
-        if entry.is_file() and "__pycache__" not in entry.parts
-    ]
+    # Prune repository metadata and generated Python caches before walking
+    # their contents; filtering files afterward still traverses large .git trees.
+    entries = []
+    for root, directories, filenames in os.walk(repository):
+        directories[:] = sorted(
+            directory
+            for directory in directories
+            if directory not in {".git", "__pycache__"}
+        )
+        entries.extend(
+            Path(root) / filename
+            for filename in sorted(filenames)
+        )
+
+    entries.sort()
 
     # Return a structured snapshot of the repository rather than exposing
     # the raw filesystem traversal to the rest of the Command Center.
