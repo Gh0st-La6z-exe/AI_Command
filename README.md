@@ -39,7 +39,8 @@ These scripts exercise the planner/executor flow and the current read-only repos
 - Inspect source files while pruning `.git` and `__pycache__` directories
 - Read UTF-8 text files
 - Resolve tool actions through a registry with input/result contracts and risk metadata
-- Track task status and structured tool results
+- Track task status, structured tool results, and undeniably truthful per-step `ExecutionRecord`s
+- Validate capability contracts *before* committing success or emitting agent completed events
 - Emit agent started/completed/failed events
 
 The planner currently maps a small set of prompt keywords to known source filenames. It is not a general natural-language planner; requests without a supported target return `TaskStatus.UNSUPPORTED` with an explanatory message. The `main.py` example demonstrates that outcome for its generic repository prompt. See [Architecture](docs/architecture.md) for component responsibilities, capability contracts, data flow, and limitations.

@@ -5,11 +5,11 @@ This document describes the implementation as it exists today. Planned capabilit
 ## Components
 
 - `CommandCenter` in `command_center/core.py` is the composition root and run coordinator. It constructs the event bus, planner, agent, and executor. `run()` creates a `Task` and `Context`, owns the full task lifecycle, coordinates repository inspection and follow-up planning, and returns the task on success.
-- `Task` in `command_center/task.py` stores the prompt, identifier, lifecycle status, and accumulated tool results.
+- `Task` in `command_center/task.py` stores the prompt, identifier, lifecycle status, accumulated tool results, and undeniably truthful `ExecutionRecord`s for each step.
 - `Context` in `command_center/context.py` carries the task, a goal string, and the repository path for planning and execution.
 - `Planner`, `Plan`, and `PlanStep` in `command_center/planner/planner.py` translate a small set of keywords into follow-up operations using an already-inspected `RepositoryResult` and registered read-only capability descriptions. Planning does not resolve or invoke tools. Unsupported requests produce an explicit unsupported plan message. A plan is an ordered list of steps; dependency identifiers exist in the data model but are not used by the executor.
-- `Executor` in `command_center/execution/executor.py` checks that steps have an action and input, validates those inputs against capability metadata, resolves actions through the registry, validates returned result types, and runs individual steps or ordered plans. It does not finalize the overall task status.
-- `Agent` in `command_center/agents/agent.py` runs the callable supplied by the executor, appends its result to the task, prints a summary, and emits per-step lifecycle events.
+- `Executor` in `command_center/execution/executor.py` checks that steps have an action and input, validates those inputs against capability metadata, resolves actions through the registry, supplies a capability validation callback, runs individual steps or ordered plans, and constructs `ExecutionRecord`s for both success and failure. It does not finalize the overall task status.
+- `Agent` in `command_center/agents/agent.py` runs the callable supplied by the executor, applies the executor's validation callback, appends its result to the task only upon passing validation, prints a summary, and emits per-step lifecycle events.
 - `get_tool()` and `get_capability()` in `command_center/tools/registry.py` expose implementations separately from immutable capability descriptions. Each description includes purpose, accepted input type/validation, result type, and risk level. Current capabilities are read-only.
 - Repository and filesystem tools return structured `RepositoryResult` and `FileResult` objects derived from `ToolResult`.
 - `EventBus` in `command_center/events/` dispatches events to subscribed handlers without coupling the agent to those handlers.
@@ -21,7 +21,7 @@ This document describes the implementation as it exists today. Planned capabilit
 3. `CommandCenter` marks the task running and asks the executor to perform one `inspect_repository` step.
 4. The agent runs the registered inspection tool, appends its structured result to the task once, prints a summary, and emits lifecycle events.
 5. `CommandCenter` passes that observed `RepositoryResult` to the planner. The planner checks registered capability metadata and returns an ordered plan containing only validated matching follow-up reads; it performs no tool calls.
-6. The executor runs the follow-up plan sequentially through the registry, and the agent records each result once.
+6. The executor runs the follow-up plan sequentially through the registry. It passes a validation callback to the agent. The agent runs the tool, applies the validation, and (if successful) records the payload in `Task.results`. The executor then constructs an `ExecutionRecord` mapping the success or failure of that step, preventing false success events and preserving evidence of partial failures.
 7. `CommandCenter` marks the task completed after supported work succeeds, unsupported when planning cannot produce a valid operation, or failed if inspection/planning/execution raises. Unsupported tasks carry an explanatory `Task.message`.
 
 ## Current boundaries and limitations
@@ -31,7 +31,7 @@ This document describes the implementation as it exists today. Planned capabilit
 - Repository inspection is executed once by `CommandCenter` before planning. Traversal prunes `.git` and `__pycache__` directories. The resulting snapshot is passed into the pure planner, which selects existing files without hidden tool calls.
 - `CommandCenter` owns task status across inspection and follow-up execution. `Executor.execute_plan()` only runs the plan it receives and does not mark the overall task completed.
 - `PlanStep.depends_on` is currently descriptive only; execution follows list order and does not evaluate dependencies.
-- Results are held in memory on the `Task`; they are not persisted across runs. The agent prints output directly, and there is no separate verifier or durable evidence store.
+- Results and per-step `ExecutionRecord`s are held in memory on the `Task`; they are not persisted to disk across runs. The system enforces execution contracts and gathers execution evidence, but a distinct Verifier to assert the *meaning* of that evidence is not yet implemented.
 - The current test suite consists of top-level assertion scripts. See the repository README for commands.
 
 ## Intended evolution

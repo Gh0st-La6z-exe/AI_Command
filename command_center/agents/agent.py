@@ -6,7 +6,7 @@ class Agent:
         self.name = name
         self.bus = bus
 
-    def run(self, step, context, tool):
+    def run(self, step, context, tool, validator=None):
         # Agent owns the execution lifecycle and observability for an
         # individual plan step. The Executor has already validated the
         # step and selected the tool, so Agent does not make those decisions.
@@ -22,6 +22,13 @@ class Agent:
 
         try:
             result = self.execute(step, context, tool)
+
+            # Executor provides the capability contract validator.
+            # If it fails, execution immediately jumps to the except block,
+            # preventing false success events and payload pollution.
+            if validator:
+                validator(result)
+
             context.task.results.append(result)
 
             self.bus.emit(
@@ -72,4 +79,7 @@ class Agent:
             f"with input '{step.input}'"
         )
 
-        print(result.describe())
+        if hasattr(result, "describe"):
+            print(result.describe())
+        else:
+            print(f"Unformatted result: {result}")

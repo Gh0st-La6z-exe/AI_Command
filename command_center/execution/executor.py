@@ -1,5 +1,8 @@
+import time
+
 from command_center.tools.result import ToolResult
 from command_center.tools.registry import get_capability
+from command_center.task import ExecutionRecord
 
 
 class Executor:
@@ -37,16 +40,50 @@ class Executor:
                 f"Unknown action: {step.action}"
             )
 
-        result = self.agent.run(step, context, tool)
+        def validator(result):
+            # Validator closes over the capability to ensure the tool's return
+            # type explicitly matches the registry's documented contract.
+            if not isinstance(result, ToolResult) or not isinstance(
+                result, capability.result_type
+            ):
+                raise TypeError(
+                    f"Action '{step.action}' returned an invalid result type."
+                )
 
-        if not isinstance(result, ToolResult) or not isinstance(
-            result, capability.result_type
-        ):
-            raise TypeError(
-                f"Action '{step.action}' returned an invalid result type."
+        start_time = time.time()
+
+        try:
+            result = self.agent.run(step, context, tool, validator=validator)
+            elapsed_ms = (time.time() - start_time) * 1000.0
+
+            # Because validation passed, the result is now securely at the end of the list.
+            result_index = len(context.task.results) - 1
+
+            record = ExecutionRecord(
+                step_id=step.id,
+                action=step.action,
+                input_reference=step.input,
+                elapsed_ms=elapsed_ms,
+                success=True,
+                result_index=result_index,
+                result_type=capability.result_type.__name__
             )
+            context.task.records.append(record)
 
-        return result
+            return result
+
+        except Exception as error:
+            elapsed_ms = (time.time() - start_time) * 1000.0
+            record = ExecutionRecord(
+                step_id=step.id,
+                action=step.action,
+                input_reference=step.input,
+                elapsed_ms=elapsed_ms,
+                success=False,
+                error=str(error)
+            )
+            context.task.records.append(record)
+            raise
 
     def execute_plan(self, plan, context):
         results = []

@@ -12,6 +12,21 @@ class TaskStatus(Enum):
 
 
 @dataclass
+class ExecutionRecord:
+    # ExecutionRecord provides undeniably truthful evidence for what occurred
+    # during a single step. It separates the execution state from the actual
+    # payloads to prevent duplication and embedding of unsafe file contents.
+    step_id: str
+    action: str
+    input_reference: str
+    elapsed_ms: float
+    success: bool
+    result_index: int | None = None
+    result_type: str | None = None
+    error: str | None = None
+
+
+@dataclass
 class Task:
     # Task is the persistent unit of work moving through the Command Center.
     # It carries the original request, tracks execution state, and stores the
@@ -30,6 +45,10 @@ class Task:
     # its execution. default_factory gives each Task its own list instead of
     # accidentally sharing one list between Task instances.
     results: list[object] = field(default_factory=list)
+
+    # Records hold the deterministic truth of execution success/failure, timing,
+    # and errors, without storing file contents directly.
+    records: list[ExecutionRecord] = field(default_factory=list)
 
     # A concise explanation is returned when the planner cannot produce
     # supported work for the request.

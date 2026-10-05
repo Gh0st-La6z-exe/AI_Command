@@ -348,5 +348,78 @@ with TemporaryDirectory() as temporary_repository:
     assert len(inspection_only_task.results) == 1
     assert "No supported source-file target" in inspection_only_task.message
 
+# --------------------------------------------------
+# EXECUTION RECORD AND VALIDATION TEST
+# --------------------------------------------------
+
+# 1. Fake a tool returning the wrong result type.
+# It should not enter Task.results, and it should record failure.
+type_fail_task = Task("Test type failure")
+type_fail_context = Context(type_fail_task, "Goal", r"C:\Dev")
+type_fail_step = PlanStep(action="read_file", input=r"C:\Dev\fake.py")
+
+type_fail_bus = EventBus()
+type_fail_agent = Agent("Test Agent", type_fail_bus)
+
+def returning_wrong_type(action):
+    return lambda path: "this is just a string, not a ToolResult"
+
+type_fail_executor = Executor(type_fail_agent, returning_wrong_type)
+
+try:
+    type_fail_executor.execute_step(type_fail_step, type_fail_context)
+    raise AssertionError("Executor allowed an invalid result type.")
+except TypeError as error:
+    assert "returned an invalid result type" in str(error)
+
+# task.results must be empty (validation failed BEFORE appending)
+assert len(type_fail_task.results) == 0
+assert len(type_fail_task.records) == 1
+record = type_fail_task.records[0]
+assert record.success is False
+assert record.error is not None
+assert "returned an invalid result type" in record.error
+assert record.step_id == type_fail_step.id
+
+
+# 2. Multi-step plan where a later step fails preserves earlier evidence.
+multi_task = Task("Test multi-step failure")
+multi_context = Context(multi_task, "Goal", r"C:\Dev")
+step1 = PlanStep(action="inspect_repository", input=r"C:\Dev")
+step2 = PlanStep(action="read_file", input=r"C:\Dev\fail.py")
+multi_plan = Plan(steps=[step1, step2])
+
+def fail_on_read(action):
+    if action == "inspect_repository":
+        return lambda path: RepositoryResult(path=path, entries=[], count=0)
+    def fail(path):
+        raise RuntimeError("simulated tool exception")
+    return fail
+
+multi_executor = Executor(type_fail_agent, fail_on_read)
+
+try:
+    multi_executor.execute_plan(multi_plan, multi_context)
+    raise AssertionError("Executor ignored tool exception.")
+except RuntimeError:
+    pass
+
+# Step 1 succeeded
+assert len(multi_task.results) == 1
+assert len(multi_task.records) == 2
+
+record1 = multi_task.records[0]
+assert record1.success is True
+assert record1.result_index == 0
+assert record1.error is None
+assert record1.action == "inspect_repository"
+
+# Step 2 failed
+record2 = multi_task.records[1]
+assert record2.success is False
+assert record2.result_index is None
+assert record2.error == "simulated tool exception"
+assert record2.action == "read_file"
+
 
 print("TEST PASSED")
