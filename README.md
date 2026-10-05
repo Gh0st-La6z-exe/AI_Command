@@ -1,5 +1,9 @@
 # AI Command Center
 
+Local-first, model-agnostic AI command center built from scratch to explore
+agentic systems, tool orchestration, deterministic execution, verification,
+memory, and AI-assisted software engineering.
+
 AI Command Center is an early local-first Python prototype for coordinating a task, creating a deterministic plan, dispatching registered tools, and collecting structured results. The current implementation is intentionally small: it has no model integration, persistent memory, verification subsystem, shell access, or network tools.
 
 ## Requirements
