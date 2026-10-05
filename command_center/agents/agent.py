@@ -1,4 +1,3 @@
-from command_center.task import TaskStatus
 from command_center.events.event import Event
 
 
@@ -8,7 +7,9 @@ class Agent:
         self.bus = bus
 
     def run(self, step, context, tool):
-        
+        # Agent owns the execution lifecycle and observability for an
+        # individual plan step. The Executor has already validated the
+        # step and selected the tool, so Agent does not make those decisions.
         self.bus.emit(
             Event(
                 type="agent.started",
@@ -36,7 +37,8 @@ class Agent:
             return result
 
         except Exception as error:
-            
+            # Failures are surfaced as events before being re-raised so
+            # higher layers can observe the failure without Agent swallowing it.
             self.bus.emit(
                 Event(
                     type="agent.failed",
@@ -51,13 +53,18 @@ class Agent:
             raise
 
     def execute(self, step, context, tool):
-        result = tool(step.input)       
+        # Agent receives the exact callable selected by the Executor.
+        # It performs the operation but does not decide which tool is valid.
+        result = tool(step.input)
 
         self.report_result(result, context, step)
 
         return result
 
     def report_result(self, result, context, step):
+        # Reporting uses execution context to make the operation observable
+        # to the developer/user. Result validation remains the Executor's
+        # responsibility rather than being coupled to the Agent.
         print(
             f"Goal: {context.goal} "
             f"Agent {self.name} executed "
