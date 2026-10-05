@@ -1,4 +1,3 @@
-from command_center.task import TaskStatus
 from command_center.tools.result import ToolResult
 
 
@@ -39,21 +38,10 @@ class Executor:
         return result
 
     def execute_plan(self, plan, context):
-        # Executor owns the lifecycle of the entire plan.
-        # Agents execute individual steps, but Executor determines whether
-        # the task as a whole is still running, completed, or failed.
-        context.task.status = TaskStatus.RUNNING
-
         results = []
 
-        try:
-            for step in plan.steps:
-                result = self.execute_step(step, context)
-                results.append(result)
+        for step in plan.steps:
+            result = self.execute_step(step, context)
+            results.append(result)
 
-            context.task.status = TaskStatus.COMPLETED
-            return results
-
-        except Exception:
-            context.task.status = TaskStatus.FAILED
-            raise
+        return results

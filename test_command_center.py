@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from command_center.agents.agent import Agent
 from command_center.context import Context
@@ -9,6 +10,7 @@ from command_center.execution.executor import Executor
 from command_center.planner.planner import Plan, Planner, PlanStep
 from command_center.task import Task, TaskStatus
 from command_center.tools.registry import get_tool
+from command_center.tools.repository import RepositoryResult
 
 
 # --------------------------------------------------
@@ -32,24 +34,21 @@ assert context.goal == goal
 
 # Verify that the Planner converts the request into the expected
 # executable structure without actually executing the plan itself.
-planner = Planner(get_tool)
+planner = Planner()
 
-plan = planner.plan(context)
+repository_result = get_tool("inspect_repository")(context.repository_path)
+plan = planner.plan(context, repository_result)
 
 assert isinstance(plan, Plan)
-assert len(plan.steps) == 2
+assert len(plan.steps) == 1
 
 assert isinstance(plan.steps[0], PlanStep)
-assert plan.steps[0].action == "inspect_repository"
-assert plan.steps[0].input == r"C:\Dev\AI_Command"
-
-assert isinstance(plan.steps[1], PlanStep)
-assert plan.steps[1].action == "read_file"
-assert plan.steps[1].input == (
+assert plan.steps[0].action == "read_file"
+assert plan.steps[0].input == (
     r"C:\Dev\AI_Command\command_center\core.py"
 )
 
-assert Path(plan.steps[1].input).name == "core.py"
+assert Path(plan.steps[0].input).name == "core.py"
 
 
 # --------------------------------------------------
@@ -68,11 +67,10 @@ executor = Executor(
 
 results = executor.execute_plan(plan, context)
 
-# Verify that every planned step produced a result and that the Task
-# reached the expected terminal state after successful execution.
-assert len(results) == 2
-assert task.status == TaskStatus.COMPLETED
-assert len(task.results) == 2
+# Executor runs its supplied steps but does not own the overall Task lifecycle.
+assert len(results) == 1
+assert task.status == TaskStatus.PENDING
+assert len(task.results) == 1
 
 
 # --------------------------------------------------
@@ -112,8 +110,7 @@ except ValueError as error:
 
 # Results belong to the Task after execution. Verify that the repository
 # inspection result and file result contain the expected structured data.
-repository_result = task.results[0]
-file_result = task.results[1]
+file_result = task.results[0]
 
 core_file = repository_result.find_file("core.py")
 
@@ -162,17 +159,17 @@ filesystem_context = Context(
     r"C:\Dev\AI_Command"
 )
 
-filesystem_plan = planner.plan(filesystem_context)
+filesystem_repository = get_tool("inspect_repository")(
+    filesystem_context.repository_path
+)
+filesystem_plan = planner.plan(filesystem_context, filesystem_repository)
 
 assert isinstance(filesystem_plan, Plan)
-assert len(filesystem_plan.steps) == 2
+assert len(filesystem_plan.steps) == 1
 
 assert isinstance(filesystem_plan.steps[0], PlanStep)
-assert filesystem_plan.steps[0].action == "inspect_repository"
-
-assert isinstance(filesystem_plan.steps[1], PlanStep)
-assert filesystem_plan.steps[1].action == "read_file"
-assert Path(filesystem_plan.steps[1].input).name == "filesystem.py"
+assert filesystem_plan.steps[0].action == "read_file"
+assert Path(filesystem_plan.steps[0].input).name == "filesystem.py"
 
 
 # --------------------------------------------------
@@ -188,15 +185,113 @@ with TemporaryDirectory() as temporary_repository:
     core_path = package_path / "core.py"
     core_path.write_text("temporary core source", encoding="utf-8")
 
-    command_task = CommandCenter().run(
+    center = CommandCenter()
+    tool_calls = []
+
+    def counting_registry(action):
+        tool = get_tool(action)
+
+        def counted_tool(value):
+            tool_calls.append(action)
+            return tool(value)
+
+        return counted_tool
+
+    center.executor.tool_registry = counting_registry
+    command_task = center.run(
         "Analyze core",
         "Verify the supplied repository path.",
         temporary_repository,
     )
 
     assert command_task.status == TaskStatus.COMPLETED
+    assert tool_calls == ["inspect_repository", "read_file"]
+    assert len(command_task.results) == 2
+    assert isinstance(command_task.results[0], RepositoryResult)
     assert Path(command_task.results[0].path).resolve() == repository_root.resolve()
     assert Path(command_task.results[1].path).resolve() == core_path.resolve()
+
+
+# A failed discovery is part of the overall task and must set its status.
+failed_inspection_task = Task("Analyze core")
+with patch("command_center.core.Task", return_value=failed_inspection_task):
+    failing_center = CommandCenter()
+
+    def failing_inspection(action):
+        def fail(_value):
+            raise RuntimeError("inspection failed")
+
+        return fail
+
+    failing_center.executor.tool_registry = failing_inspection
+
+    try:
+        failing_center.run("Analyze core", "Fail inspection.", "unused")
+        raise AssertionError("CommandCenter ignored an inspection failure.")
+    except RuntimeError as error:
+        assert str(error) == "inspection failed"
+
+assert failed_inspection_task.status == TaskStatus.FAILED
+
+
+# A failed follow-up read must also fail the overall task after inspection.
+failed_read_task = Task("Analyze core")
+with TemporaryDirectory() as temporary_repository:
+    package_path = Path(temporary_repository) / "command_center"
+    package_path.mkdir()
+    (package_path / "core.py").write_text("source", encoding="utf-8")
+
+    with patch("command_center.core.Task", return_value=failed_read_task):
+        failing_center = CommandCenter()
+
+        def failing_read(action):
+            if action == "inspect_repository":
+                return get_tool(action)
+
+            def fail(_value):
+                raise RuntimeError("read failed")
+
+            return fail
+
+        failing_center.executor.tool_registry = failing_read
+
+        try:
+            failing_center.run(
+                "Analyze core",
+                "Fail follow-up read.",
+                temporary_repository,
+            )
+            raise AssertionError("CommandCenter ignored a read failure.")
+        except RuntimeError as error:
+            assert str(error) == "read failed"
+
+assert failed_read_task.status == TaskStatus.FAILED
+
+
+# A request with no recognized target still completes after one inspection.
+with TemporaryDirectory() as temporary_repository:
+    center = CommandCenter()
+    tool_calls = []
+
+    def inspection_only_registry(action):
+        tool = get_tool(action)
+
+        def counted_tool(value):
+            tool_calls.append(action)
+            return tool(value)
+
+        return counted_tool
+
+    center.executor.tool_registry = inspection_only_registry
+    inspection_only_task = center.run(
+        "Summarize this project",
+        "No file target is selected.",
+        temporary_repository,
+    )
+
+    assert inspection_only_task.status == TaskStatus.COMPLETED
+    assert tool_calls == ["inspect_repository"]
+    assert len(inspection_only_task.results) == 1
 
 
 print("TEST PASSED")

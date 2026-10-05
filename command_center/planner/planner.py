@@ -34,17 +34,9 @@ class Plan:
 
 
 class Planner:
-    def __init__(self, tool_registry):
-        # Planner receives the tool registry as a dependency so it can resolve
-        # tools without importing individual implementations directly.
-        self.tool_registry = tool_registry
-
-    def plan(self, context):
-        # Planner extracts the information it needs from Context. The Task
-        # contains the user's request, while Context provides the repository
-        # location needed to turn that request into concrete steps.
+    def plan(self, context, repository_result):
+        # Planning consumes observed repository state; it never invokes tools.
         prompt = context.task.prompt
-        repository_path = context.repository_path
 
         # Translate keywords from the user's request into known repository
         # targets. This is intentionally simple rule-based planning for now;
@@ -57,23 +49,9 @@ class Planner:
             "agent": "agent.py",
         }
 
-        # Planner needs a snapshot of the repository before it can determine
-        # whether requested files actually exist and resolve their paths.
-        inspect_tool = self.tool_registry("inspect_repository")
-        repository_result = inspect_tool(repository_path)
-
         # Construct the Plan separately from execution. Planner decides WHAT
         # work should happen; Executor is responsible for actually performing it.
         plan = Plan(steps=[])
-
-        # Repository inspection is always the first planned operation because
-        # file-targeted steps depend on knowing what exists in the repository.
-        plan.add_step(
-            PlanStep(
-                action="inspect_repository",
-                input=repository_path,
-            )
-        )
 
         # Match request keywords against known targets and create read_file
         # steps only when the corresponding file exists in the repository.
